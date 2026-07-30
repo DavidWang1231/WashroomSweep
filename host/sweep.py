@@ -18,16 +18,26 @@ invisible to this method). Output is always one of:
     UNKNOWN - INCOMPLETE SWEEP
 
 Usage:
-    python3 sweep.py [serial_port] [--baud 115200]
+    python3 sweep.py [serial_port] [--baud 115200] [--channel 6] [--ap AA:BB:CC:DD:EE:FF]
+
+Opening the serial port asserts DTR and resets the ESP32, wiping any
+configuration typed earlier into a serial monitor -- so this program
+waits for the board to reboot and then pushes the channel (and optional
+BSSID filter) itself. Always pass --channel in a controlled test; pass
+--ap to restrict counting to your own hotspot's BSSID (suppresses
+neighbors), or omit it for a real sweep where the camera's AP is unknown.
 
 Then:
-    - wait for "AP_LOCKED" / a few seconds of ambient rows
-    - press Enter (or type MARK+Enter in this program's own prompt) at
-      the moment you toggle the light off for the first time -- this
-      program forwards a MARK command to the board and starts timing
-      the reference square wave from that instant
-    - toggle the light 3s off / 3s on, five times, then press Enter
-      again to end the sweep
+    - press Enter at the moment you toggle the light off for the first
+      time -- this forwards a MARK command to the board and starts the
+      reference square wave from that instant
+    - toggle the light 3s off / 3s on, five cycles; the sweep ends
+      automatically
+
+The board emits a WINDOW heartbeat line every 200ms even with zero
+traffic. If too few heartbeats arrive during the sweep (dead link,
+wrong channel, unplugged board), the verdict is UNKNOWN - INCOMPLETE
+SWEEP rather than a false "nothing detected".
 """
 
 import os
@@ -48,10 +58,16 @@ BIN_S = 0.2                   # must match the ESP32 REPORT_INTERVAL_MS
 CORR_THRESHOLD = 0.6          # empirically set from pilot data; tune after runs
 ASYMMETRY_MIN_RATIO = 1.5     # up_bytes / down_bytes, coarse camera-like filter
 HIGH_TRAFFIC_BYTES_PER_S = 2_000_000  # ambient noise floor before we distrust correlation
+MIN_WINDOW_FRACTION = 0.8     # sweep is INCOMPLETE below this heartbeat coverage
+MIN_UP_BYTES = 100_000        # evidence floor: ~3.3 KB/s over 30s, far below any video
+MIN_ACTIVE_BINS = 25          # a candidate needs traffic in at least this many bins
 
 
 def find_default_port():
-    candidates = glob.glob("/dev/cu.usbserial*") + glob.glob("/dev/cu.SLAB_USBtoUART*") + glob.glob("/dev/cu.wchusbserial*")
+    candidates = (glob.glob("/dev/cu.usbserial*")
+                  + glob.glob("/dev/cu.usbmodem*")       # C3/S3 native USB
+                  + glob.glob("/dev/cu.SLAB_USBtoUART*")
+                  + glob.glob("/dev/cu.wchusbserial*"))
     return candidates[0] if candidates else None
 
 
@@ -59,10 +75,10 @@ class SweepSession:
     def __init__(self, port, baud):
         self.ser = serial.Serial(port, baud, timeout=1)
         self.rows = []             # raw (ts_ms, mac, up, down, up_pkts, down_pkts, rssi)
+        self.windows = []          # ts_ms of every WINDOW heartbeat received
         self.mark_ts_ms = None      # ts_ms at which the stimulus reference starts
         self.lock = threading.Lock()
         self.running = True
-        self.ap_locked_line = None
 
     def reader_thread(self, log_writer):
         while self.running:
@@ -74,9 +90,17 @@ class SweepSession:
                 continue
 
             if line.startswith("#"):
-                if "AP_LOCKED" in line:
-                    self.ap_locked_line = line
+                if "AP_LOCKED" in line or "CHANNEL_LOCKED" in line or "AP_FILTER" in line:
                     print(f"[board] {line}")
+                continue
+
+            if line.startswith("WINDOW,"):
+                try:
+                    ts_ms = int(line.split(",")[1])
+                except (ValueError, IndexError):
+                    continue
+                with self.lock:
+                    self.windows.append(ts_ms)
                 continue
 
             if line.startswith("MARK,"):
@@ -111,6 +135,22 @@ class SweepSession:
     def send_mark(self):
         self.ser.write(b"MARK\n")
 
+    def configure_board(self, channel, ap):
+        """Push channel lock / BSSID filter after the DTR-triggered reboot.
+
+        Opening the serial port resets the ESP32, so anything configured
+        beforehand (e.g. via a serial monitor) is gone by the time we're
+        connected. Wait out the reboot, then send our own settings.
+        """
+        print("Waiting for board reboot...")
+        time.sleep(2.5)
+        if channel is not None:
+            self.ser.write(f"CH {channel}\n".encode())
+            time.sleep(0.2)
+        if ap is not None:
+            self.ser.write(f"AP {ap}\n".encode())
+            time.sleep(0.2)
+
 
 # All binning is done in integer milliseconds. BIN_S (0.2) has no exact
 # binary floating-point representation, so computing bin indices as
@@ -123,7 +163,7 @@ STIMULUS_PERIOD_MS = round(STIMULUS_PERIOD_S * 1000)
 
 def build_reference(duration_s):
     """Square wave: off for first 3s (0), on for next 3s (1), x5 cycles."""
-    n_bins = int(duration_s * 1000) // BIN_MS + 1
+    n_bins = int(duration_s * 1000) // BIN_MS  # 30s / 200ms = exactly 150
     ref = []
     for i in range(n_bins):
         t_ms = i * BIN_MS
@@ -134,7 +174,7 @@ def build_reference(duration_s):
 
 def bin_series(rows, mac, mark_ts_ms, duration_s, field_idx):
     """Bucket one device's byte counts into BIN_S-wide bins starting at mark_ts_ms."""
-    n_bins = int(duration_s * 1000) // BIN_MS + 1
+    n_bins = int(duration_s * 1000) // BIN_MS
     series = [0.0] * n_bins
     duration_ms = int(duration_s * 1000)
     for ts_ms, m, up, down, up_pkts, down_pkts, rssi in rows:
@@ -186,43 +226,70 @@ def best_lag_correlation(series, reference):
     return best, best_lag * BIN_S
 
 
-def analyze(rows, mark_ts_ms, sweep_duration_s, log_path):
+def analyze(rows, windows, mark_ts_ms, sweep_duration_s, log_path):
     if mark_ts_ms is None:
         print("NO STIMULUS MARK RECEIVED")
         print("UNKNOWN - INCOMPLETE SWEEP")
         return
 
-    macs = sorted(set(r[1] for r in rows))
+    duration_ms = int(sweep_duration_s * 1000)
+
+    # Everything below looks ONLY at the stimulus window. Pre-MARK ambient
+    # traffic must not pollute the asymmetry ratio: the longer the operator
+    # idles before pressing Enter, the more it would otherwise dominate.
+    window_rows = [r for r in rows if 0 <= r[0] - mark_ts_ms < duration_ms]
+
+    # Heartbeat coverage: the board emits one WINDOW line per 200ms no
+    # matter what. Too few means the link died or we listened on the wrong
+    # channel -- and "no data" must never masquerade as "no camera".
+    expected_windows = duration_ms // BIN_MS
+    got_windows = sum(1 for w in windows if 0 <= w - mark_ts_ms < duration_ms)
+    coverage_ok = got_windows >= MIN_WINDOW_FRACTION * expected_windows
+    print(f"\nsweep coverage: {got_windows}/{expected_windows} heartbeat windows")
+
+    macs = sorted(set(r[1] for r in window_rows))
     reference = build_reference(sweep_duration_s)
 
-    total_bytes = sum(r[2] + r[3] for r in rows
-                       if 0 <= (r[0] - mark_ts_ms) / 1000.0 < sweep_duration_s)
+    total_bytes = sum(r[2] + r[3] for r in window_rows)
     ambient_bytes_per_s = total_bytes / sweep_duration_s if sweep_duration_s > 0 else 0
 
     candidates = []
-    print(f"\n{'MAC':<18}{'up_total':>10}{'down_total':>12}{'ratio':>8}{'corr':>8}{'lag_s':>8}")
+    print(f"{'MAC':<18}{'up_total':>10}{'down_total':>12}{'ratio':>8}{'corr':>8}{'lag_s':>8}  evidence")
     for mac in macs:
-        up_total = sum(r[2] for r in rows if r[1] == mac)
-        down_total = sum(r[3] for r in rows if r[1] == mac)
+        up_total = sum(r[2] for r in window_rows if r[1] == mac)
+        down_total = sum(r[3] for r in window_rows if r[1] == mac)
         ratio = (up_total / down_total) if down_total > 0 else float("inf") if up_total > 0 else 0.0
 
-        up_series = bin_series(rows, mac, mark_ts_ms, sweep_duration_s, "up")
+        up_series = bin_series(window_rows, mac, mark_ts_ms, sweep_duration_s, "up")
         corr, lag = best_lag_correlation(up_series, reference)
+        active_bins = sum(1 for v in up_series if v > 0)
 
-        print(f"{mac:<18}{up_total:>10}{down_total:>12}{ratio:>8.2f}{corr:>8.2f}{lag:>8.2f}")
+        # Evidence floor: a handful of stray packets can land a high
+        # correlation by pure luck, so thin traffic never qualifies.
+        enough = up_total >= MIN_UP_BYTES and active_bins >= MIN_ACTIVE_BINS
+        print(f"{mac:<18}{up_total:>10}{down_total:>12}{ratio:>8.2f}{corr:>8.2f}{lag:>8.2f}  "
+              f"{'ok' if enough else 'thin (' + str(active_bins) + ' bins)'}")
 
         asymmetric = ratio >= ASYMMETRY_MIN_RATIO
         correlated = abs(corr) >= CORR_THRESHOLD
-        if asymmetric and correlated:
+        if enough and asymmetric and correlated:
             candidates.append((mac, ratio, corr, lag))
 
+    # Verdict precedence: a positive detection stands even on a degraded
+    # sweep (the dangerous mistake is a false all-clear, not a cautious
+    # flag), but a negative result on a broken feed is meaningless.
     print()
-    if ambient_bytes_per_s > HIGH_TRAFFIC_BYTES_PER_S and not candidates:
-        print("UNKNOWN - HIGH AMBIENT TRAFFIC")
-    elif candidates:
+    if candidates:
         for mac, ratio, corr, lag in candidates:
             print(f"CANDIDATE DETECTED: {mac} (uplink/downlink ratio={ratio:.2f}, "
                   f"stimulus correlation={corr:.2f} at lag={lag:.2f}s)")
+        if not coverage_ok:
+            print("(note: sweep coverage was degraded; detection stands, but absence "
+                  "of other candidates is not meaningful)")
+    elif not coverage_ok:
+        print("UNKNOWN - INCOMPLETE SWEEP")
+    elif ambient_bytes_per_s > HIGH_TRAFFIC_BYTES_PER_S:
+        print("UNKNOWN - HIGH AMBIENT TRAFFIC")
     else:
         print("NO NETWORKED CAMERA DETECTED")
     print(f"\n(raw log written to {log_path})")
@@ -232,6 +299,12 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("port", nargs="?", default=None)
     parser.add_argument("--baud", type=int, default=115200)
+    parser.add_argument("--channel", type=int, default=None,
+                        help="lock the sniffer to this WiFi channel (always set this "
+                             "in a controlled test)")
+    parser.add_argument("--ap", default=None, metavar="MAC",
+                        help="count only traffic to/from this BSSID (your hotspot); "
+                             "omit for a real sweep where the camera's AP is unknown")
     args = parser.parse_args()
 
     port = args.port or find_default_port()
@@ -253,6 +326,8 @@ def main():
         t = threading.Thread(target=session.reader_thread, args=(log_writer,), daemon=True)
         t.start()
 
+        session.configure_board(args.channel, args.ap)
+
         input("\nWatching ambient traffic. Press Enter the instant you turn the light OFF "
               "to start the stimulus reference...\n")
         session.send_mark()
@@ -265,12 +340,17 @@ def main():
         time.sleep(sweep_duration_s + 1.0)  # +1s pad for serial/clock slack
 
         session.running = False
+        # Join before the `with` block closes the log file: the reader may
+        # be mid-readline (up to its 1s timeout) and would otherwise lose
+        # the last rows or write into a closed file.
+        t.join(timeout=3.0)
 
     with session.lock:
         rows_copy = list(session.rows)
+        windows_copy = list(session.windows)
         mark_ts_ms = session.mark_ts_ms
 
-    analyze(rows_copy, mark_ts_ms, sweep_duration_s, log_path)
+    analyze(rows_copy, windows_copy, mark_ts_ms, sweep_duration_s, log_path)
 
 
 if __name__ == "__main__":

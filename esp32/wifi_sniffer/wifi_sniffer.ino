@@ -2,36 +2,49 @@
  * WashroomSweep - ESP32 promiscuous WiFi sniffer
  *
  * Passive, header-only 802.11 sniffer. No decryption, no association.
- * For each source MAC on the local channel, accumulates uplink vs
+ * For each client MAC on the local channel, accumulates uplink vs
  * downlink byte/packet counts and average RSSI over a rolling window,
- * then emits one CSV row per active MAC over serial for the host-side
- * (Python) correlation script.
+ * then emits one CSV row per active client over serial for the
+ * host-side (Python) correlation script.
  *
  * Board: any ESP32 variant (classic / C3 / S3) works unchanged, since
  * this only uses the common esp_wifi promiscuous API. Arduino IDE, no
  * ESP-IDF project needed.
  *
- * Direction logic: for a data frame, if addr2 (transmitter) equals the
- * AP's MAC, this is AP -> station traffic, i.e. downlink for whoever is
- * addr1 (the receiver). Otherwise addr2 is a station transmitting, i.e.
- * uplink for addr2. The AP's MAC is learned automatically from the
- * first beacon frame seen (addr2 of a management/beacon frame is the
- * BSSID), or can be set manually with the "AP <mac>" serial command if
- * multiple networks are in range and the wrong one gets locked.
+ * Direction logic uses the ToDS/FromDS bits in the frame control field,
+ * which classify direction for ANY infrastructure BSS without needing
+ * to know the AP's identity:
+ *   ToDS=1, FromDS=0  ->  client -> AP   (uplink,   client = addr2)
+ *   ToDS=0, FromDS=1  ->  AP -> client   (downlink, client = addr1)
+ * Everything else (IBSS, WDS 4-address) is ignored, as are frames whose
+ * client address is broadcast/multicast (group bit set).
  *
- * Serial commands (type text + Enter over the Arduino serial monitor):
+ * Optionally, the sweep can be restricted to one BSS with the "AP" serial
+ * command: once set, only frames to/from that BSSID are counted. Use this
+ * in a controlled test (known hotspot) to suppress ambient traffic from
+ * neighboring networks. Leave it unset for a real sweep -- a hidden
+ * camera is on an AP you do NOT know, so filtering would blind you.
+ * There is deliberately no automatic AP learning: in a dense environment
+ * the first beacon heard is almost never the network you care about.
+ *
+ * Serial commands (type text + Enter over the serial monitor):
  *   MARK        - emit a MARK event now; host uses this as the t=0
  *                 instant for the light-toggle stimulus
  *   CH <n>      - stop hopping and lock to channel n (1-13)
  *   HOP         - toggle channel hopping (cycles 1/6/11) vs channel lock
- *   AP <mac>    - manually set/override the AP MAC, e.g. AP aa:bb:cc:dd:ee:ff
+ *   AP <mac>    - restrict counting to this BSSID, e.g. AP aa:bb:cc:dd:ee:ff
+ *   AP OFF      - clear the BSSID restriction (count every BSS)
  *
- * Serial output, CSV, one header row at boot then one row per active
- * MAC per REPORT_INTERVAL_MS:
+ * Serial output, one header row at boot, then per REPORT_INTERVAL_MS:
+ *   WINDOW,<ts_ms>,<interval_ms>,<active_devices>   heartbeat, ALWAYS
+ *                 emitted every window even with zero traffic, so the
+ *                 host can tell "quiet room" from "dead link / wrong
+ *                 channel" and refuse to report a verdict on a dead feed
  *   ts_ms,mac,up_bytes,down_bytes,up_pkts,down_pkts,rssi_avg
- * Two special row shapes appear in the same stream:
+ *                 one row per client that had traffic this window
+ * Special rows in the same stream:
  *   MARK,ts_ms                  - stimulus mark, host aligns on this
- *   #comment text...            - informational only, host should skip
+ *   #comment text...            - informational only, host skips
  *                                  any line starting with '#'
  */
 
@@ -56,7 +69,7 @@ static DeviceStats devices[MAX_DEVICES];
 static portMUX_TYPE tableMux = portMUX_INITIALIZER_UNLOCKED;
 
 static uint8_t apMac[6] = {0, 0, 0, 0, 0, 0};
-static volatile bool apLocked = false;
+static volatile bool apFilterOn = false;
 
 static bool hopping = false;
 static uint8_t currentChannel = 6;
@@ -99,47 +112,48 @@ static int findOrAllocDevice(const uint8_t *mac, uint32_t now) {
 }
 
 static void promiscuousCallback(void *buf, wifi_promiscuous_pkt_type_t type) {
-  if (type == WIFI_PKT_MISC) return;
+  if (type != WIFI_PKT_DATA) return;
 
   wifi_promiscuous_pkt_t *pkt = (wifi_promiscuous_pkt_t *)buf;
   const uint8_t *payload = pkt->payload;
   int len = pkt->rx_ctrl.sig_len;
-  if (len < 16) return; // shorter than addr1+addr2, not safe to parse
+  if (len < 24) return; // shorter than a 3-address data header
 
-  if (type == WIFI_PKT_MGMT) {
-    uint8_t subtype = (payload[0] >> 4) & 0x0F;
-    if (subtype == 8 && !apLocked) { // beacon: addr2 is the BSSID
-      memcpy(apMac, payload + 10, 6);
-      apLocked = true;
-    }
-    return;
+  bool toDS   = payload[1] & 0x01;
+  bool fromDS = payload[1] & 0x02;
+  const uint8_t *addr1 = payload + 4;   // receiver
+  const uint8_t *addr2 = payload + 10;  // transmitter
+
+  const uint8_t *client;
+  bool isUplink;
+  if (toDS && !fromDS) {          // client -> AP; addr1 = BSSID
+    if (apFilterOn && !macEquals(addr1, apMac)) return;
+    client = addr2;
+    isUplink = true;
+  } else if (!toDS && fromDS) {   // AP -> client; addr2 = BSSID
+    if (apFilterOn && !macEquals(addr2, apMac)) return;
+    client = addr1;
+    isUplink = false;
+  } else {
+    return; // IBSS or WDS frame, not a client<->AP exchange
   }
+  if (client[0] & 0x01) return;   // broadcast/multicast, not a real client
 
-  if (type != WIFI_PKT_DATA) return;
-
-  const uint8_t *addr1 = payload + 4;
-  const uint8_t *addr2 = payload + 10;
   int32_t rssi = pkt->rx_ctrl.rssi;
   uint32_t now = millis();
 
   portENTER_CRITICAL(&tableMux);
-  if (apLocked && macEquals(addr2, apMac)) {
-    // AP -> station: downlink, attribute to the receiving station (addr1)
-    int slot = findOrAllocDevice(addr1, now);
-    devices[slot].downBytes += len;
-    devices[slot].downPkts += 1;
-    devices[slot].rssiSum += rssi;
-    devices[slot].rssiCount += 1;
-    devices[slot].lastSeenMs = now;
-  } else {
-    // station -> anything: uplink, attribute to the transmitting station (addr2)
-    int slot = findOrAllocDevice(addr2, now);
+  int slot = findOrAllocDevice(client, now);
+  if (isUplink) {
     devices[slot].upBytes += len;
     devices[slot].upPkts += 1;
-    devices[slot].rssiSum += rssi;
-    devices[slot].rssiCount += 1;
-    devices[slot].lastSeenMs = now;
+  } else {
+    devices[slot].downBytes += len;
+    devices[slot].downPkts += 1;
   }
+  devices[slot].rssiSum += rssi;
+  devices[slot].rssiCount += 1;
+  devices[slot].lastSeenMs = now;
   portEXIT_CRITICAL(&tableMux);
 }
 
@@ -177,11 +191,16 @@ static void handleSerialLine(String line) {
   } else if (line.startsWith("AP ") || line.startsWith("ap ")) {
     String macStr = line.substring(3);
     macStr.trim();
+    if (macStr.equalsIgnoreCase("OFF")) {
+      apFilterOn = false;
+      Serial.println("#AP_FILTER,off");
+      return;
+    }
     int v[6];
     if (sscanf(macStr.c_str(), "%x:%x:%x:%x:%x:%x",
                &v[0], &v[1], &v[2], &v[3], &v[4], &v[5]) == 6) {
       for (int i = 0; i < 6; i++) apMac[i] = (uint8_t)v[i];
-      apLocked = true;
+      apFilterOn = true;
       Serial.print("#AP_LOCKED,");
       printMacHex(apMac);
       Serial.print(",");
@@ -234,6 +253,14 @@ void loop() {
   }
 
   if (now - lastReportMs >= REPORT_INTERVAL_MS) {
+    // Snapshot-and-reset under the lock, print outside it. Serial.print
+    // at 115200 baud takes milliseconds per row; holding an
+    // interrupt-masking spinlock that long would stall the promiscuous
+    // callback (dropped frames = self-inflicted rate noise) and can even
+    // trip the watchdog if the UART FIFO backs up.
+    static DeviceStats snapshot[MAX_DEVICES];
+    int nActive = 0;
+
     portENTER_CRITICAL(&tableMux);
     for (int i = 0; i < MAX_DEVICES; i++) {
       if (!devices[i].inUse) continue;
@@ -244,23 +271,7 @@ void loop() {
         continue;
       }
 
-      float rssiAvg = devices[i].rssiCount > 0
-        ? (float)devices[i].rssiSum / devices[i].rssiCount
-        : 0.0f;
-
-      Serial.print(now);
-      Serial.print(',');
-      printMacHex(devices[i].mac);
-      Serial.print(',');
-      Serial.print(devices[i].upBytes);
-      Serial.print(',');
-      Serial.print(devices[i].downBytes);
-      Serial.print(',');
-      Serial.print(devices[i].upPkts);
-      Serial.print(',');
-      Serial.print(devices[i].downPkts);
-      Serial.print(',');
-      Serial.println(rssiAvg, 1);
+      snapshot[nActive++] = devices[i];
 
       devices[i].upBytes = 0;
       devices[i].downBytes = 0;
@@ -270,6 +281,36 @@ void loop() {
       devices[i].rssiCount = 0;
     }
     portEXIT_CRITICAL(&tableMux);
+
+    // Heartbeat first, every window, even when nActive == 0: this is how
+    // the host distinguishes a genuinely quiet room from a dead link.
+    Serial.print("WINDOW,");
+    Serial.print(now);
+    Serial.print(',');
+    Serial.print(REPORT_INTERVAL_MS);
+    Serial.print(',');
+    Serial.println(nActive);
+
+    for (int i = 0; i < nActive; i++) {
+      float rssiAvg = snapshot[i].rssiCount > 0
+        ? (float)snapshot[i].rssiSum / snapshot[i].rssiCount
+        : 0.0f;
+
+      Serial.print(now);
+      Serial.print(',');
+      printMacHex(snapshot[i].mac);
+      Serial.print(',');
+      Serial.print(snapshot[i].upBytes);
+      Serial.print(',');
+      Serial.print(snapshot[i].downBytes);
+      Serial.print(',');
+      Serial.print(snapshot[i].upPkts);
+      Serial.print(',');
+      Serial.print(snapshot[i].downPkts);
+      Serial.print(',');
+      Serial.println(rssiAvg, 1);
+    }
+
     lastReportMs = now;
   }
 }
