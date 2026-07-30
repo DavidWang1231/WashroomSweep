@@ -159,16 +159,26 @@ What has been verified so far — and, just as importantly, what hasn't:
   < 12 KB). The uplink/downlink asymmetry alone cleanly separates the
   camera from every other device, over real RF.
 - **Light-stimulus correlation over the air: not closed with this
-  stand-in.** A phone running an IP-camera app streams at near-constant
-  bitrate: its auto-exposure/auto-gain turns a darkened scene into a noisy
-  full-detail image, so neither toggling the room light nor covering the
-  lens moved the bitrate in a clean square wave (room light gave a slow
-  ~2.4x drift matching the pilot, but not phase-locked to the 3 s cadence;
-  lens-cover gave only 1.4x). The correlation refinement therefore remains
-  verified in simulation and by the network-side pilot only. This is a
-  fidelity limit of a phone-as-camera stand-in, not of the method — real
-  fixed-exposure IP cameras, and the pilot's own streaming measurement,
-  show the expected variable-bitrate response.
+  stand-in.** Six attempts, each blocked by a different property of using
+  a phone as the camera, and the failures are worth recording because they
+  define what a valid stand-in needs:
+  1. *Constant bitrate.* In its default mode the app streamed at a fixed
+     ~550 KB/s regardless of scene. Room-light toggling produced only a
+     slow ~2.4x drift (matching the pilot's measured ratio) that was not
+     phase-locked to the 3 s cadence; covering the lens moved it 1.4x.
+  2. *Auto-gain.* Darkening the scene does not simplify it — the sensor
+     amplifies until it returns a noisy, high-detail, full-bitrate image.
+  3. *Dual-camera compositing.* Switching the app to MJPEG did make the
+     stream variable (fully occluding the lens dropped it to ~1 KB, a
+     300x+ swing, confirming the mechanism). But the app composites a
+     mandatory front+rear pair, and the front camera kept imaging the room
+     and held the floor at ~430 KB/s, so occluding only the rear lens
+     could never drive the total toward zero.
+  Correlation therefore remains verified in simulation and by the
+  network-side pilot only. This is a fidelity limit of the stand-in, not
+  of the method: a valid stand-in needs fixed exposure, a single sensor,
+  and variable-bitrate encoding — which is exactly what a real IP camera
+  is, and what the pilot measured a 2.4x response from.
 
 ### Bugs this shook out
 
