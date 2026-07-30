@@ -1,0 +1,456 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wireless Security — Live Scan</title>
+<style>
+  :root {
+    --bg:#0e1116; --panel:#161b22; --line:#262d38; --txt:#e6edf3; --dim:#8b949e;
+    --strong:#3fb950; --near:#d29922; --wall:#8b949e; --far:#4d5661;
+    --accent:#58a6ff; --flash:#1f6feb; --detail:#1b2230;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg:#f6f8fa; --panel:#fff; --line:#d8dee4; --txt:#1f2328; --dim:#656d76;
+      --strong:#1a7f37; --near:#9a6700; --wall:#656d76; --far:#8c959f;
+      --accent:#0969da; --flash:#ddf4ff; --detail:#f6f8fa;
+    }
+  }
+  * { box-sizing:border-box; }
+  body {
+    margin:0; padding:20px; background:var(--bg); color:var(--txt);
+    font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  }
+  header { display:flex; align-items:center; gap:14px; flex-wrap:wrap; margin-bottom:18px; }
+  h1 { font-size:18px; margin:0; letter-spacing:.3px; }
+  .status { color:var(--dim); font-size:12px; }
+  .dot { display:inline-block; width:7px; height:7px; border-radius:50%;
+         background:var(--strong); margin-right:5px; animation:pulse 2s infinite; }
+  .dot.off { background:var(--near); animation:none; }
+  @keyframes pulse { 50% { opacity:.3; } }
+
+  button {
+    font:600 13px/1 inherit; color:var(--txt); background:var(--panel);
+    border:1px solid var(--line); border-radius:7px; padding:8px 15px; cursor:pointer;
+  }
+  button:hover { border-color:var(--accent); color:var(--accent); }
+  button.paused { border-color:var(--near); color:var(--near); }
+  .paused-note { color:var(--near); font-size:12px; }
+
+  .panels { display:grid; grid-template-columns:repeat(auto-fit,minmax(760px,1fr)); gap:18px; }
+  /* min-width:0 stops the grid item from stretching to fit the table --
+     without it the panel blows past the viewport instead of scrolling. */
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:10px;
+           overflow:hidden; min-width:0; }
+  .panel h2 {
+    font-size:13px; margin:0; padding:11px 14px; border-bottom:1px solid var(--line);
+    display:flex; justify-content:space-between; font-weight:600;
+  }
+  .panel h2 span { color:var(--dim); font-weight:400; }
+  .scroll { overflow-x:auto; }
+  table { width:100%; border-collapse:collapse; }
+  th {
+    text-align:left; font-size:11px; text-transform:uppercase; letter-spacing:.5px;
+    color:var(--dim); font-weight:600; padding:8px 10px; border-bottom:1px solid var(--line);
+  }
+  td { padding:7px 10px; border-bottom:1px solid var(--line); white-space:nowrap; }
+  tbody:last-child tr:last-child td { border-bottom:none; }
+  tr.main { transition:background .4s; cursor:pointer; }
+  tr.main:hover { background:var(--detail); }
+  tr.main.new { background:var(--flash); }
+  .mac { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12.5px; }
+
+  /* expander chevron */
+  .chev { color:var(--dim); font-size:10px; width:12px; display:inline-block; }
+
+  /* detail drawer */
+  tr.detail td { background:var(--detail); padding:11px 14px 13px 34px; white-space:normal; }
+  .kv { display:flex; flex-wrap:wrap; gap:7px 26px; }
+  .kv div { font-size:12.5px; }
+  .kv b { color:var(--dim); font-weight:500; margin-right:6px; }
+
+  /* signal bar */
+  .sig { display:flex; align-items:center; gap:7px; }
+  .bar { width:52px; height:5px; background:var(--line); border-radius:3px; overflow:hidden; }
+  .bar i { display:block; height:100%; border-radius:3px; transition:width .4s ease; }
+  .rssi { font-variant-numeric:tabular-nums; font-size:12.5px; min-width:34px; }
+
+  .tag { font-size:10.5px; padding:1.5px 6px; border-radius:9px;
+         border:1px solid var(--line); color:var(--dim); }
+  .tag.ap  { color:var(--accent); border-color:var(--accent); }
+  .tag.rnd { color:var(--near);   border-color:var(--near); }
+  .d-IN-ROOM { color:var(--strong); font-weight:600; }
+  .d-near { color:var(--near); }
+  .d-wall { color:var(--wall); }
+  .d-far  { color:var(--far); }
+  .num { font-variant-numeric:tabular-nums; text-align:right; }
+  .hot { color:var(--strong); font-weight:600; }
+  .trend { width:12px; display:inline-block; }
+  .up { color:var(--strong); } .down { color:var(--dim); }
+  .empty { padding:26px 14px; color:var(--dim); text-align:center; font-size:13px; }
+  tbody.stale { opacity:.45; }
+
+  .more { border-top:1px solid var(--line); }
+  .more button {
+    width:100%; border:none; background:none; border-radius:0;
+    padding:11px; font-size:12.5px; color:var(--accent); font-weight:600;
+  }
+  .more button:hover { background:var(--detail); }
+
+  /* ---- sweep ---- */
+  #sweep { margin-bottom:18px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:10px;
+          padding:16px 18px; }
+  .cue { display:flex; align-items:center; gap:20px; flex-wrap:wrap; }
+  .lamp {
+    font:700 22px/1 inherit; letter-spacing:1px; padding:16px 22px; border-radius:9px;
+    border:2px solid var(--line); min-width:210px; text-align:center;
+  }
+  .lamp.off { background:#11151c; color:#8b949e; border-color:#30363d; }
+  .lamp.on  { background:#fff8c4; color:#5a4b00; border-color:#d9c200; }
+  .count { font:600 30px/1 inherit; font-variant-numeric:tabular-nums; }
+  .hint { color:var(--dim); font-size:13px; }
+  .prog { height:5px; background:var(--line); border-radius:3px; margin-top:14px; overflow:hidden; }
+  .prog i { display:block; height:100%; background:var(--accent); transition:width .2s linear; }
+
+  .verdict { font:700 16px/1.4 inherit; margin-bottom:6px; }
+  .v-CANDIDATE { color:#f85149; }
+  .v-NONE      { color:var(--strong); }
+  .v-UNKNOWN   { color:var(--near); }
+  .vdetail { font-size:13px; color:var(--dim); max-width:76ch; }
+  .sweep-table { margin-top:14px; width:100%; border-collapse:collapse; font-size:12.5px; }
+  .sweep-table th { font-size:10.5px; padding:6px 9px; }
+  .sweep-table td { padding:6px 9px; }
+  tr.cand td { background:rgba(248,81,73,.12); font-weight:600; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Wireless Security</h1>
+  <button id="pause">Pause</button>
+  <div class="status"><span class="dot" id="dot"></span><span id="status">connecting…</span></div>
+  <button id="sweep-btn">Run light sweep</button>
+  <div class="paused-note" id="paused-note" hidden>view frozen — still recording in the background</div>
+</header>
+
+<div id="sweep" hidden><div class="card" id="sweep-card"></div></div>
+
+<div class="panels">
+  <div class="panel">
+    <h2>WiFi <span id="wifi-count">—</span></h2>
+    <div class="scroll">
+      <table id="wifi-table">
+        <thead><tr>
+          <th></th><th>Signal</th><th>MAC</th><th>Distance</th><th>Type</th>
+          <th class="num">Upload</th><th class="num">Download</th>
+        </tr></thead>
+      </table>
+      <div class="empty" id="wifi-empty">waiting for data…</div>
+    </div>
+    <div class="more" id="wifi-more" hidden></div>
+  </div>
+
+  <div class="panel">
+    <h2>Bluetooth <span id="ble-count">—</span></h2>
+    <div class="scroll">
+      <table id="ble-table">
+        <thead><tr>
+          <th></th><th>Signal</th><th>Address</th><th>Distance</th><th>Name</th>
+        </tr></thead>
+      </table>
+      <div class="empty" id="ble-empty">waiting for data…</div>
+    </div>
+    <div class="more" id="ble-more" hidden></div>
+  </div>
+</div>
+
+<script>
+const known    = new Set();   // keys we've already seen (so only truly new rows flash)
+const expanded = new Set();   // keys whose detail drawer is open
+let booted = false;
+let paused = false;
+
+const COLS = { wifi: 7, ble: 5 };   // column count, for the detail row's colspan
+
+// Long lists are unreadable, so show only the closest few until asked.
+const COLLAPSED_ROWS = 8;
+const showAll = { wifi: false, ble: false };
+
+function renderMore(which, total) {
+  const el = document.getElementById(which + '-more');
+  if (total <= COLLAPSED_ROWS) { el.hidden = true; return; }
+  el.hidden = false;
+  const open = showAll[which];
+  el.innerHTML = `<button>${open
+      ? `Show fewer (closest ${COLLAPSED_ROWS})`
+      : `Show all ${total} devices — ${total - COLLAPSED_ROWS} more`}</button>`;
+  el.querySelector('button').onclick = () => {
+    showAll[which] = !showAll[which];
+    tick();                      // redraw straight away
+  };
+}
+
+// Byte counts get large fast -- show them human-readably.
+function bytes(n) {
+  if (!n) return '0';
+  if (n < 1024) return n + ' B';
+  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+  return (n / 1048576).toFixed(2) + ' MB';
+}
+
+const pct   = r => Math.max(0, Math.min(100, Math.round((r + 100) * 100 / 70)));
+const color = d => d === 'IN-ROOM' ? 'var(--strong)'
+              : d === 'near'       ? 'var(--near)'
+              : d === 'wall'       ? 'var(--wall)' : 'var(--far)';
+const dur   = s => s < 60 ? s + 's' : s < 3600 ? Math.floor(s/60) + 'm' : Math.floor(s/3600) + 'h';
+const arrow = t => t > 0 ? '<span class="trend up">▲</span>'
+               : t < 0 ? '<span class="trend down">▼</span>' : '<span class="trend"></span>';
+
+function signal(d) {
+  return `<div class="sig">${arrow(d.trend)}
+    <div class="bar"><i style="width:${pct(d.rssi)}%;background:${color(d.dist)}"></i></div>
+    <span class="rssi">${d.rssi}</span></div>`;
+}
+
+// --- compact row: only what you need at a glance ---
+function mainHTML(d, open) {
+  const chev = `<td><span class="chev">${open ? '▾' : '▸'}</span></td>`;
+  if (d.source === 'wifi') {
+    return `${chev}
+      <td>${signal(d)}</td>
+      <td class="mac">${d.mac}</td>
+      <td class="d-${d.dist}">${d.dist}</td>
+      <td>${d.kind === 'AP' ? '<span class="tag ap">router</span>'
+                            : '<span class="tag">device</span>'}</td>
+      <td class="num ${(d.up_rate > 20000 || d.up > 100000) ? 'hot' : ''}">
+        ${bytes(d.up)}${d.up_rate ? `<div style="font-size:11px;opacity:.75">${bytes(d.up_rate)}/s</div>` : ''}</td>
+      <td class="num" style="color:var(--dim)">
+        ${bytes(d.down)}${d.down_rate ? `<div style="font-size:11px;opacity:.75">${bytes(d.down_rate)}/s</div>` : ''}</td>`;
+  }
+  return `${chev}
+    <td>${signal(d)}</td>
+    <td class="mac">${d.mac}</td>
+    <td class="d-${d.dist}">${d.dist}</td>
+    <td>${d.name || d.maker || '<span style="color:var(--dim)">—</span>'}</td>`;
+}
+
+// --- everything else, revealed on click ---
+function detailHTML(d) {
+  const kv = (k, v) => `<div><b>${k}</b>${v}</div>`;
+  const common = kv('private address', d.priv ? 'yes — randomized' : 'no — real, look-up-able')
+               + kv('present for', dur(d.uptime))
+               + kv('last heard', d.age + 's ago');
+  if (d.source === 'wifi') {
+    // Upload well above download is the streaming-camera shape.
+    const ratio = d.down > 0 ? (d.up / d.down) : (d.up > 0 ? Infinity : 0);
+    const ratioText = d.up === 0 ? 'no upload'
+                    : ratio === Infinity ? 'upload only — no download at all'
+                    : ratio.toFixed(2) + '× (' + (ratio >= 1.5 ? 'upload-heavy' : 'normal') + ')';
+    return `<div class="kv">
+      ${kv('channel', d.channel || '—')}
+      ${kv('uploaded', bytes(d.up) + ' in ' + d.uppkts.toLocaleString() + ' packets')}
+      ${kv('downloaded', bytes(d.down) + ' in ' + d.downpkts.toLocaleString() + ' packets')}
+      ${kv('upload rate', bytes(d.up_rate || 0) + '/s')}
+      ${kv('download rate', bytes(d.down_rate || 0) + '/s')}
+      ${kv('up/down ratio', ratioText)}
+      ${kv('type', d.kind === 'AP' ? 'router / access point' : 'client device')}
+      ${common}</div>`;
+  }
+  return `<div class="kv">
+    ${kv('maker', d.maker || 'unknown')}
+    ${kv('name', d.name || 'not broadcast')}
+    ${kv('advertisements', d.seen.toLocaleString())}
+    ${common}</div>`;
+}
+
+// Render with FLIP animation so rows visibly slide when they reorder.
+// Each device is its own <tbody> holding a main row + a hidden detail row.
+function render(table, list) {
+  const before = new Map();
+  for (const tb of table.tBodies) before.set(tb.dataset.key, tb.getBoundingClientRect().top);
+
+  const seen = new Set();
+  for (const d of list) {
+    seen.add(d.key);
+    let tb = table.querySelector(`tbody[data-key="${CSS.escape(d.key)}"]`);
+
+    if (!tb) {
+      tb = document.createElement('tbody');
+      tb.dataset.key = d.key;
+      tb.innerHTML = '<tr class="main"></tr><tr class="detail" hidden><td></td></tr>';
+      const key = d.key;
+      tb.querySelector('tr.main').addEventListener('click', () => {
+        const wasOpen = expanded.has(key);
+        wasOpen ? expanded.delete(key) : expanded.add(key);
+        tb.querySelector('tr.detail').hidden = wasOpen;
+        tb.querySelector('.chev').textContent = wasOpen ? '▸' : '▾';
+      });
+      if (booted) {
+        const row = tb.querySelector('tr.main');
+        row.classList.add('new');
+        setTimeout(() => row.classList.remove('new'), 1600);
+      }
+      known.add(d.key);
+    }
+
+    const open = expanded.has(d.key);
+    tb.querySelector('tr.main').innerHTML = mainHTML(d, open);
+    const det = tb.querySelector('tr.detail');
+    det.hidden = !open;
+    det.firstElementChild.colSpan = COLS[d.source];
+    det.firstElementChild.innerHTML = detailHTML(d);
+    tb.classList.toggle('stale', d.age > 12);
+
+    table.appendChild(tb);   // moves it into sorted position
+  }
+
+  for (const tb of [...table.tBodies]) if (!seen.has(tb.dataset.key)) tb.remove();
+
+  for (const tb of table.tBodies) {
+    const prev = before.get(tb.dataset.key);
+    if (prev === undefined) continue;
+    const delta = prev - tb.getBoundingClientRect().top;
+    if (Math.abs(delta) < 1) continue;
+    tb.animate([{ transform:`translateY(${delta}px)` }, { transform:'none' }],
+               { duration: 380, easing: 'cubic-bezier(.2,.8,.2,1)' });
+  }
+}
+
+const btn = document.getElementById('pause');
+btn.addEventListener('click', () => {
+  paused = !paused;
+  btn.textContent = paused ? 'Resume' : 'Pause';
+  btn.classList.toggle('paused', paused);
+  document.getElementById('paused-note').hidden = !paused;
+  document.getElementById('dot').classList.toggle('off', paused);
+  if (!paused) tick();
+});
+
+// ---------------- sweep ----------------
+const sweepBtn  = document.getElementById('sweep-btn');
+const sweepWrap = document.getElementById('sweep');
+const sweepCard = document.getElementById('sweep-card');
+
+sweepBtn.addEventListener('click', async () => {
+  const r = await fetch('/api/sweep/start', { method: 'POST' });
+  const j = await r.json();
+  if (!j.ok) { alert(j.error || 'Could not start the sweep.'); return; }
+  sweepWrap.hidden = false;
+});
+
+function renderSweep(s) {
+  if (!s.available) { sweepBtn.disabled = true; sweepBtn.title = 'host/sweep.py not found'; }
+
+  if (s.phase === 'idle') { sweepWrap.hidden = true; return; }
+  sweepWrap.hidden = false;
+
+  if (s.phase === 'recording') {
+    sweepBtn.disabled = true;
+    sweepBtn.textContent = 'Sweep running…';
+    const period = s.period || 3;
+    // The reference wave is OFF for the first period, then ON, repeating.
+    const pos    = s.elapsed % (period * 2);
+    const lightOn = pos >= period;
+    const left   = (period - (pos % period)).toFixed(1);
+    const cycle  = Math.floor(s.elapsed / (period * 2)) + 1;
+    sweepCard.innerHTML = `
+      <div class="cue">
+        <div class="lamp ${lightOn ? 'on' : 'off'}">LIGHTS ${lightOn ? 'ON' : 'OFF'}</div>
+        <div>
+          <div class="count">${left}s</div>
+          <div class="hint">until you switch — cycle ${cycle} of ${s.cycles || 5}</div>
+        </div>
+        <div class="hint">Follow the box: flip the room light every ${period}s.<br>
+          Recording ${s.elapsed.toFixed(1)}s / ${s.duration}s.</div>
+      </div>
+      <div class="prog"><i style="width:${(s.elapsed / s.duration * 100).toFixed(1)}%"></i></div>`;
+    return;
+  }
+
+  if (s.phase === 'analyzing') {
+    sweepCard.innerHTML = '<div class="hint">Correlating traffic against the light pattern…</div>';
+    return;
+  }
+
+  if (s.phase === 'error') {
+    sweepBtn.disabled = false;
+    sweepBtn.textContent = 'Run light sweep';
+    sweepCard.innerHTML = `<div class="verdict v-UNKNOWN">Sweep failed</div>
+                           <div class="vdetail">${s.error || ''}</div>`;
+    return;
+  }
+
+  // done
+  sweepBtn.disabled = false;
+  sweepBtn.textContent = 'Run light sweep again';
+  const r = s.result || {};
+  const cls = r.verdict?.startsWith('CANDIDATE') ? 'v-CANDIDATE'
+            : r.verdict?.startsWith('NO ')       ? 'v-NONE' : 'v-UNKNOWN';
+  const rows = (r.devices || []).map(d => `
+    <tr class="${d.candidate ? 'cand' : ''}">
+      <td class="mac">${d.mac}</td>
+      <td class="num">${bytes(d.up)}</td>
+      <td class="num">${bytes(d.down)}</td>
+      <td class="num">${d.ratio === null ? '∞' : d.ratio}</td>
+      <td class="num">${d.corr}</td>
+      <td class="num">${d.lag}s</td>
+      <td>${d.evidence}</td>
+    </tr>`).join('');
+
+  sweepCard.innerHTML = `
+    <div class="verdict ${cls}">${r.verdict || '—'}</div>
+    <div class="vdetail">${r.detail || ''}</div>
+    <div class="hint" style="margin-top:8px">heartbeat coverage ${r.coverage || '—'}</div>
+    ${rows ? `<table class="sweep-table">
+      <thead><tr><th>MAC</th><th class="num">Upload</th><th class="num">Download</th>
+      <th class="num">Ratio</th><th class="num">Correlation</th><th class="num">Lag</th>
+      <th>Evidence</th></tr></thead><tbody>${rows}</tbody></table>`
+    : '<div class="hint" style="margin-top:10px">No device sent any traffic during the sweep.</div>'}`;
+}
+
+async function tickSweep() {
+  try {
+    renderSweep(await (await fetch('/api/sweep')).json());
+  } catch (e) { /* monitor.py down; the main tick reports it */ }
+}
+tickSweep();
+setInterval(tickSweep, 300);   // fast, so the light cue stays in time
+
+async function tick() {
+  if (paused) return;   // freeze the view; monitor.py keeps collecting regardless
+  try {
+    const r = await fetch('/api/devices');
+    const { devices, meta } = await r.json();
+    const wifi = devices.filter(d => d.source === 'wifi');
+    const ble  = devices.filter(d => d.source === 'ble');
+
+    // Collapse to the closest few unless the user expanded the panel. Any row
+    // whose drawer is open stays visible so it can't vanish while being read.
+    const clip = (list, which) => showAll[which] ? list
+        : list.filter((d, i) => i < COLLAPSED_ROWS || expanded.has(d.key));
+
+    render(document.getElementById('wifi-table'), clip(wifi, 'wifi'));
+    render(document.getElementById('ble-table'),  clip(ble, 'ble'));
+    renderMore('wifi', wifi.length);
+    renderMore('ble', ble.length);
+    document.getElementById('wifi-empty').style.display = wifi.length ? 'none' : '';
+    document.getElementById('ble-empty').style.display  = ble.length  ? 'none' : '';
+    document.getElementById('wifi-count').textContent =
+      `${wifi.length} devices · ${meta.wifi_frames.toLocaleString()} frames`;
+    document.getElementById('ble-count').textContent = `${ble.length} devices`;
+
+    const ports = Object.entries(meta.ports)
+      .map(([p, s]) => `${p.split('/').pop()}: ${s}`).join('   ');
+    document.getElementById('status').textContent = ports || 'no boards reporting yet';
+    booted = true;
+  } catch (e) {
+    document.getElementById('status').textContent = 'monitor.py not responding';
+  }
+}
+tick();
+setInterval(tick, 1000);
+</script>
+</body>
+</html>
