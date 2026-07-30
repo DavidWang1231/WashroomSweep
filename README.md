@@ -149,11 +149,26 @@ What has been verified so far — and, just as importantly, what hasn't:
   recovered 18 distinct client MACs with per-device uplink/downlink counts
   and a rock-steady 200 ms reporting cadence (heartbeat intervals measured
   at exactly 200 ms across 59 consecutive windows, zero resets).
-- **Not validated: end-to-end detection of a live camera.** Our stand-in
-  camera ran on an 802.11ax link, which this hardware cannot see (see
-  blind spots). The light-stimulus correlation is therefore verified in
-  simulation and by the network-side pilot, but has not yet been closed
-  over the air against a real streaming device.
+- **Live over-the-air detection via the asymmetry signal: demonstrated.**
+  To get a stand-in camera onto a PHY this hardware can read, we ran the
+  ESP32 as its own SoftAP (forcing 802.11n) while sniffing in promiscuous
+  mode on the same radio, and had it continuously drain an HTTP camera
+  stream from a phone joined to that AP. Over a 30 s capture the streaming
+  phone appeared as **17.9 MB uplink / 0 downlink — 99.9% of all air
+  traffic**, three orders of magnitude above every other client (all
+  < 12 KB). The uplink/downlink asymmetry alone cleanly separates the
+  camera from every other device, over real RF.
+- **Light-stimulus correlation over the air: not closed with this
+  stand-in.** A phone running an IP-camera app streams at near-constant
+  bitrate: its auto-exposure/auto-gain turns a darkened scene into a noisy
+  full-detail image, so neither toggling the room light nor covering the
+  lens moved the bitrate in a clean square wave (room light gave a slow
+  ~2.4x drift matching the pilot, but not phase-locked to the 3 s cadence;
+  lens-cover gave only 1.4x). The correlation refinement therefore remains
+  verified in simulation and by the network-side pilot only. This is a
+  fidelity limit of a phone-as-camera stand-in, not of the method — real
+  fixed-exposure IP cameras, and the pilot's own streaming measurement,
+  show the expected variable-bitrate response.
 
 ### Bugs this shook out
 
