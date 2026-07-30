@@ -123,6 +123,19 @@
   .sweep-table th { font-size:10.5px; padding:6px 9px; }
   .sweep-table td { padding:6px 9px; }
   tr.cand td { background:rgba(248,81,73,.12); font-weight:600; }
+
+/* Live asymmetry alert. The sweep verdict needs 30s of stimulus; this flags the
+   upload-only shape immediately so an operator isn't reading a table to find it. */
+#live-alert{
+  margin:0 0 14px; padding:14px 18px; border-radius:8px;
+  background:rgba(248,81,73,.12); border:1px solid rgba(248,81,73,.5);
+  border-left:4px solid #f85149;
+}
+.la-title{font-size:12px; letter-spacing:.16em; font-weight:700; color:#f85149}
+.la-mac{font-size:26px; font-weight:700; margin-top:4px;
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.la-why{font-size:14px; margin-top:4px; opacity:.9}
+.la-note{font-size:12px; margin-top:6px; opacity:.65}
 </style>
 </head>
 <body>
@@ -136,6 +149,14 @@
 </header>
 
 <div id="sweep" hidden><div class="card" id="sweep-card"></div></div>
+
+<div id="live-alert" hidden>
+  <div class="la-title">CANDIDATE DETECTED</div>
+  <div class="la-mac" id="la-mac"></div>
+  <div class="la-why" id="la-why"></div>
+  <div class="la-note">Sustained one-way upload at video scale. Run the light sweep to
+    test whether it can see <em>this</em> room.</div>
+</div>
 
 <div class="panels">
   <div class="panel">
@@ -418,6 +439,25 @@ async function tickSweep() {
 tickSweep();
 setInterval(tickSweep, 300);   // fast, so the light cue stays in time
 
+// Video-scale upload with little or nothing coming back. Thresholds match
+// sweep.py's asymmetry stage so the banner and the verdict agree.
+const LIVE_RATE_MIN = 60000;   // bytes/sec
+const LIVE_RATIO_MIN = 4.0;
+function liveAlert(wifi) {
+  const box = document.getElementById('live-alert');
+  const hit = wifi
+    .filter(d => (d.up_rate || 0) >= LIVE_RATE_MIN &&
+                 (d.down > 0 ? d.up / d.down : Infinity) >= LIVE_RATIO_MIN)
+    .sort((a, b) => (b.up_rate || 0) - (a.up_rate || 0))[0];
+  if (!hit) { box.hidden = true; return; }
+  const ratio = hit.down > 0 ? (hit.up / hit.down).toFixed(1) + '\u00d7 more up than down'
+                             : 'no download at all';
+  document.getElementById('la-mac').textContent = hit.mac;
+  document.getElementById('la-why').textContent =
+    bytes(hit.up_rate) + '/s uploading, ' + ratio;
+  box.hidden = false;
+}
+
 async function tick() {
   if (paused) return;   // freeze the view; monitor.py keeps collecting regardless
   try {
@@ -440,6 +480,8 @@ async function tick() {
     document.getElementById('wifi-count').textContent =
       `${wifi.length} devices · ${meta.wifi_frames.toLocaleString()} frames`;
     document.getElementById('ble-count').textContent = `${ble.length} devices`;
+
+    liveAlert(wifi);
 
     const ports = Object.entries(meta.ports)
       .map(([p, s]) => `${p.split('/').pop()}: ${s}`).join('   ');
