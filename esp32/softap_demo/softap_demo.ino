@@ -38,7 +38,13 @@ static uint32_t lastReport = 0;
 static WiFiClient pull;
 static String pullIp = ""; static int pullPort = 0; static String pullPath = "";
 static bool pulling = false;
-static String pullAuth = "";   // base64 of user:pass, empty = none
+static String pullAuth = "YWRtaW46MTIzMQ==";  // base64 "admin:1231" -- the demo app's login
+// Autodiscovery: with no laptop in the loop, walk the DHCP pool looking for a
+// camera app answering on the usual port. The dashboard holds the serial port
+// during a demo, so nobody can type a PULL command while it runs.
+static bool autoFind = true;
+static int  probeHost = 2;          // 192.168.4.<probeHost>
+static uint32_t lastProbe = 0;
 static uint32_t pulledBytes = 0;
 
 static int slotFor(const uint8_t* m, uint32_t now){
@@ -103,7 +109,8 @@ static void startPull(){
 static void handleLine(String l){
   l.trim(); if(!l.length()) return;
   if(l.equalsIgnoreCase("MARK")){ Serial.printf("MARK,%lu\n", millis()); }
-  else if(l.equalsIgnoreCase("STOP")){ pulling=false; pull.stop(); Serial.println("#PULL_STOPPED"); }
+  else if(l.equalsIgnoreCase("STOP")){ pulling=false; autoFind=false; pull.stop(); Serial.println("#PULL_STOPPED"); }
+  else if(l.equalsIgnoreCase("AUTO")){ autoFind=!autoFind; Serial.printf("#AUTOFIND,%s\n", autoFind?"on":"off"); }
   else if(l.startsWith("AUTH ")||l.startsWith("auth ")){
     pullAuth = l.substring(5); pullAuth.trim();
     Serial.printf("#AUTH_SET,%s\n", pullAuth.c_str());
@@ -113,6 +120,7 @@ static void handleLine(String l){
     if(a>0&&b>a&&c>b){
       pullIp=l.substring(a+1,b); pullPort=l.substring(b+1,c).toInt(); pullPath=l.substring(c+1);
       pullIp.trim(); pullPath.trim();
+      autoFind=false;
       startPull();
     }
   }
@@ -142,6 +150,21 @@ void loop(){
     if(ch=='\n'||ch=='\r'){ if(buf.length()){handleLine(buf); buf="";} }
     else buf+=ch;
   }
+  // With no client configured yet, probe the DHCP pool for a camera app.
+  // One host every 1.5s, so a full pass over .2-.10 takes ~13s.
+  if(autoFind && !pulling && WiFi.softAPgetStationNum() > 0
+     && millis() - lastProbe > 1500){
+    lastProbe = millis();
+    pullIp   = String("192.168.4.") + probeHost;
+    pullPort = 8081;
+    pullPath = "/video";
+    Serial.printf("#PROBE,%s\n", pullIp.c_str());
+    startPull();
+    if(!pull.connected()) pulling = false;      // nothing there; keep walking
+    probeHost++;
+    if(probeHost > 10) probeHost = 2;
+  }
+
   // drain the camera stream so the phone keeps uploading
   if(pulling){
     static uint32_t lastTry=0;
