@@ -216,6 +216,15 @@ void setup() {
   WiFi.mode(WIFI_MODE_STA);
   WiFi.disconnect();
   esp_wifi_set_promiscuous(true);
+  // Restrict to management + data frames. Critically, this EXCLUDES
+  // FCS-failed frames: near a modern high-rate AP the radio produces a
+  // steady stream of mis-decoded garbage whose header bytes (and hence
+  // "MAC addresses") are effectively random. Those junk MACs flood the
+  // device table, evict real stations via LRU, and zero their counters
+  // before the next report -- measured at ~99% loss of real traffic.
+  wifi_promiscuous_filter_t filter = {};
+  filter.filter_mask = WIFI_PROMIS_FILTER_MASK_MGMT | WIFI_PROMIS_FILTER_MASK_DATA;
+  esp_wifi_set_promiscuous_filter(&filter);
   esp_wifi_set_promiscuous_rx_cb(&promiscuousCallback);
   setChannel(currentChannel);
 

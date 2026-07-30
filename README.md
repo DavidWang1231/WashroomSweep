@@ -60,6 +60,20 @@ LocCams). Our contribution is:
 - **2.4 GHz only.** The ESP32 radio (classic, C3, and S3 alike) cannot see
   5 GHz or 6 GHz WiFi; a camera streaming on those bands is invisible to
   this hardware.
+- **802.11ax (WiFi 6) links are invisible — measured.** The ESP32 radio
+  demodulates 802.11b/g/n only. Against a modern iPhone hotspot serving a
+  MacBook, we measured a **6.6 MB/s** download over 2.4 GHz channel 6 and
+  the sniffer, parked on that same channel, recovered **~2 KB/s — about
+  0.03%** of it. The receive path was verified healthy at the same time:
+  the driver reported `channel=6` and beacons from nearby APs arrived at
+  the correct 100 ms cadence at −50 to −61 dBm. Counting FCS-failed frames
+  as an airtime proxy did not help either — that figure stayed flat
+  (415 KB/s idle vs 402 KB/s during the download), because it is dominated
+  by ambient noise from surrounding networks rather than the link under
+  test. This is a hardware ceiling with no software workaround.
+  Practical consequence: the method still applies to the intended target,
+  since inexpensive IP cameras are typically 802.11n, but any camera
+  negotiating an 802.11ax link is out of reach for this front end.
 - **RSSI is not distance.** We report signal strength but do not localize,
   and never claim a device's position.
 - A busy RF environment can drown the signal; the tool then reports
@@ -130,9 +144,34 @@ What has been verified so far — and, just as importantly, what hasn't:
   `UNKNOWN - INCOMPLETE SWEEP`, not a false all-clear.
 - Both sketches compile clean on classic ESP32, ESP32-C3, and ESP32-S3
   (arduino-esp32 core 3.3.11).
-- **Not yet validated: real over-the-air RF capture on ESP32 hardware.**
-  The simulation exercises the full host pipeline but proves nothing about
-  the promiscuous-mode capture path itself.
+- Over-the-air capture on real hardware (classic ESP32, ESP32-D0WD-V3):
+  **works for 802.11b/g/n traffic.** A 15 s run on a locked channel
+  recovered 18 distinct client MACs with per-device uplink/downlink counts
+  and a rock-steady 200 ms reporting cadence (heartbeat intervals measured
+  at exactly 200 ms across 59 consecutive windows, zero resets).
+- **Not validated: end-to-end detection of a live camera.** Our stand-in
+  camera ran on an 802.11ax link, which this hardware cannot see (see
+  blind spots). The light-stimulus correlation is therefore verified in
+  simulation and by the network-side pilot, but has not yet been closed
+  over the air against a real streaming device.
+
+### Bugs this shook out
+
+Two real defects were found and fixed while validating against hardware,
+both of which had been silently corrupting results:
+
+- **Missing promiscuous filter.** Without an explicit
+  `esp_wifi_set_promiscuous_filter`, the driver also delivers FCS-failed
+  frames. Near a busy modern AP these are frequent, and their header bytes
+  are essentially random — measured as a near-uniform spread across all
+  eight ToDS/FromDS combinations, where real infrastructure traffic should
+  concentrate in two. Those junk frames minted random MAC addresses that
+  flooded the fixed-size device table and evicted real stations via LRU,
+  zeroing their counters before each report.
+- **Float binning.** Bin indices computed as `int(seconds / 0.2)` misfiled
+  ~12% of samples (18 of 151 bins in a clean noiseless test), dragging a
+  true 1.00 correlation down to 0.71 — enough to push a detectable camera
+  under the threshold. All binning is now integer milliseconds.
 
 ## Team
 
