@@ -71,6 +71,107 @@ def find_default_port():
     return candidates[0] if candidates else None
 
 
+def _consume_line(session, line, log_writer):
+    """Parse one line of board output into a session. Shared by both
+    transports so serial and UDP behave identically."""
+    if not line:
+        return
+
+    if line.startswith("#"):
+        if "AP_LOCKED" in line or "CHANNEL_LOCKED" in line or "AP_FILTER" in line:
+            print(f"[board] {line}")
+        return
+
+    if line.startswith("WINDOW,"):
+        try:
+            ts_ms = int(line.split(",")[1])
+        except (ValueError, IndexError):
+            return
+        with session.lock:
+            session.windows.append(ts_ms)
+        return
+
+    if line.startswith("MARK,"):
+        try:
+            ts_ms = int(line.split(",")[1])
+        except (ValueError, IndexError):
+            return
+        with session.lock:
+            if session.mark_ts_ms is None:
+                session.mark_ts_ms = ts_ms
+                print(f"[mark] stimulus t=0 at board ts_ms={ts_ms}")
+        return
+
+    if line.startswith("ts_ms,mac"):
+        return
+
+    parts = line.split(",")
+    if len(parts) != 7:
+        return
+    try:
+        row = (int(parts[0]), parts[1], int(parts[2]), int(parts[3]),
+               int(parts[4]), int(parts[5]), float(parts[6]))
+    except ValueError:
+        return
+    with session.lock:
+        session.rows.append(row)
+    log_writer.writerow(list(row))
+
+
+class UdpSession:
+    """Same interface as SweepSession, fed by UDP instead of a serial cable.
+
+    Lets the board run untethered: it joins (or hosts) a WiFi network and
+    sends the identical CSV lines to this host's UDP port. Note the board
+    must still be sniffing the channel it is transmitting on, so its own
+    uplink shows up in the capture -- filter its MAC out when reading
+    results.
+    """
+
+    def __init__(self, listen_port, board_addr=None):
+        import socket
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.sock.bind(("0.0.0.0", listen_port))
+        self.sock.settimeout(1.0)
+        self.board_addr = board_addr   # (ip, port) to send commands back to
+        self.rows = []
+        self.windows = []
+        self.mark_ts_ms = None
+        self.lock = threading.Lock()
+        self.running = True
+        self._buf = ""
+
+    def _send(self, text):
+        if self.board_addr:
+            self.sock.sendto(text.encode(), self.board_addr)
+
+    def send_mark(self):
+        self._send("MARK\n")
+
+    def configure_board(self, channel, ap):
+        # No DTR reset over UDP, so no reboot wait is needed.
+        if channel is not None:
+            self._send(f"CH {channel}\n")
+            time.sleep(0.2)
+        if ap is not None:
+            self._send(f"AP {ap}\n")
+            time.sleep(0.2)
+
+    def reader_thread(self, log_writer):
+        while self.running:
+            try:
+                data, addr = self.sock.recvfrom(4096)
+            except Exception:
+                continue
+            if self.board_addr is None:
+                self.board_addr = addr      # learn the board from its first packet
+            self._buf += data.decode("utf-8", errors="ignore")
+            while "\n" in self._buf:
+                line, self._buf = self._buf.split("\n", 1)
+                _consume_line(self, line.strip(), log_writer)
+
+
 class SweepSession:
     def __init__(self, port, baud):
         self.ser = serial.Serial(port, baud, timeout=1)
@@ -86,51 +187,7 @@ class SweepSession:
                 line = self.ser.readline().decode("utf-8", errors="ignore").strip()
             except Exception:
                 continue
-            if not line:
-                continue
-
-            if line.startswith("#"):
-                if "AP_LOCKED" in line or "CHANNEL_LOCKED" in line or "AP_FILTER" in line:
-                    print(f"[board] {line}")
-                continue
-
-            if line.startswith("WINDOW,"):
-                try:
-                    ts_ms = int(line.split(",")[1])
-                except (ValueError, IndexError):
-                    continue
-                with self.lock:
-                    self.windows.append(ts_ms)
-                continue
-
-            if line.startswith("MARK,"):
-                ts_ms = int(line.split(",")[1])
-                with self.lock:
-                    if self.mark_ts_ms is None:
-                        self.mark_ts_ms = ts_ms
-                        print(f"[mark] stimulus t=0 at board ts_ms={ts_ms}")
-                continue
-
-            if line.startswith("ts_ms,mac"):
-                continue  # header row
-
-            parts = line.split(",")
-            if len(parts) != 7:
-                continue
-            try:
-                ts_ms = int(parts[0])
-                mac = parts[1]
-                up = int(parts[2])
-                down = int(parts[3])
-                up_pkts = int(parts[4])
-                down_pkts = int(parts[5])
-                rssi = float(parts[6])
-            except ValueError:
-                continue
-
-            with self.lock:
-                self.rows.append((ts_ms, mac, up, down, up_pkts, down_pkts, rssi))
-            log_writer.writerow([ts_ms, mac, up, down, up_pkts, down_pkts, rssi])
+            _consume_line(self, line, log_writer)
 
     def send_mark(self):
         self.ser.write(b"MARK\n")
@@ -302,19 +359,26 @@ def main():
     parser.add_argument("--channel", type=int, default=None,
                         help="lock the sniffer to this WiFi channel (always set this "
                              "in a controlled test)")
+    parser.add_argument("--udp", type=int, default=None, metavar="PORT",
+                        help="read CSV from this UDP port instead of a serial "
+                             "cable (untethered board)")
     parser.add_argument("--ap", default=None, metavar="MAC",
                         help="count only traffic to/from this BSSID (your hotspot); "
                              "omit for a real sweep where the camera's AP is unknown")
     args = parser.parse_args()
 
-    port = args.port or find_default_port()
-    if not port:
-        print("No serial port found/specified. Pass it explicitly, e.g.:")
-        print("  python3 sweep.py /dev/cu.usbserial-0001")
-        sys.exit(1)
-
-    print(f"Opening {port} @ {args.baud}...")
-    session = SweepSession(port, args.baud)
+    if args.udp:
+        print(f"Listening for board CSV on UDP :{args.udp} ...")
+        session = UdpSession(args.udp)
+    else:
+        port = args.port or find_default_port()
+        if not port:
+            print("No serial port found/specified. Pass it explicitly, e.g.:")
+            print("  python3 sweep.py /dev/cu.usbserial-0001")
+            print("  python3 sweep.py --udp 5005      (untethered board)")
+            sys.exit(1)
+        print(f"Opening {port} @ {args.baud}...")
+        session = SweepSession(port, args.baud)
 
     log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "logs")
     os.makedirs(log_dir, exist_ok=True)
