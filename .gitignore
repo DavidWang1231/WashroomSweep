@@ -1,0 +1,13 @@
+# Python
+host/.venv/
+__pycache__/
+*.pyc
+
+# Experiment logs (raw CSV runs stay local; commit curated results explicitly)
+logs/*.csv
+
+# Arduino build artifacts
+esp32/**/build/
+
+# macOS
+.DS_Store
