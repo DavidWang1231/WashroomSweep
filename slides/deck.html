@@ -1,0 +1,374 @@
+<title>WashroomSweep — Wireless for Humanity</title>
+<style>
+  :root{
+    --ground:#0a1017; --panel:#121d29; --rule:#24343f;
+    --ink:#d5e0eb; --dim:#8a9fb4; --faint:#5d7287;
+    --accent:#35d0d8; --alert:#ff5d5d; --good:#4ad991;
+  }
+  @media (prefers-color-scheme: light){
+    :root{
+      --ground:#f3f6f9; --panel:#ffffff; --rule:#cfdae4;
+      --ink:#12202c; --dim:#4d6274; --faint:#8397a8;
+      --accent:#0d8990; --alert:#c92a2a; --good:#1f8a5a;
+    }
+  }
+  :root[data-theme="dark"]{
+    --ground:#0a1017; --panel:#121d29; --rule:#24343f;
+    --ink:#d5e0eb; --dim:#8a9fb4; --faint:#5d7287;
+    --accent:#35d0d8; --alert:#ff5d5d; --good:#4ad991;
+  }
+  :root[data-theme="light"]{
+    --ground:#f3f6f9; --panel:#ffffff; --rule:#cfdae4;
+    --ink:#12202c; --dim:#4d6274; --faint:#8397a8;
+    --accent:#0d8990; --alert:#c92a2a; --good:#1f8a5a;
+  }
+
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{
+    background:var(--ground); color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB",
+      "Microsoft YaHei",system-ui,sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    font-variant-numeric:tabular-nums}
+
+  .slide{
+    display:none; min-height:100vh; padding:8vh 8vw 10vh;
+    flex-direction:column; justify-content:center;
+  }
+  .slide.on{display:flex}
+
+  .eyebrow{font-size:.8rem; letter-spacing:.24em; text-transform:uppercase;
+    color:var(--accent); font-weight:600; margin-bottom:1.6rem}
+  h1{font-size:clamp(2.8rem,7vw,5.2rem); line-height:1; margin:0 0 1.4rem;
+    font-weight:700; letter-spacing:-.03em; text-wrap:balance}
+  h2{font-size:clamp(2rem,4.4vw,3.4rem); line-height:1.1; margin:0 0 2rem;
+    font-weight:650; letter-spacing:-.02em; text-wrap:balance}
+  p{font-size:clamp(1.1rem,1.7vw,1.5rem); line-height:1.55; margin:0 0 1.1rem;
+    max-width:52ch; color:var(--dim)}
+  p.lead{color:var(--ink)}
+  strong{color:var(--ink); font-weight:650}
+
+  ul{margin:.5rem 0 0; padding-left:1.3rem; max-width:54ch}
+  li{font-size:clamp(1.05rem,1.6vw,1.4rem); line-height:1.6; color:var(--dim);
+    margin-bottom:1rem}
+  li::marker{color:var(--accent)}
+  li b{color:var(--ink); font-weight:650}
+
+  .grid{display:grid; gap:1.5rem; margin-top:.5rem}
+  .g2{grid-template-columns:repeat(2,1fr)}
+  .g3{grid-template-columns:repeat(3,1fr)}
+  @media(max-width:900px){.g2,.g3{grid-template-columns:1fr}}
+
+  .card{background:var(--panel); border:1px solid var(--rule); border-radius:8px;
+    padding:1.5rem 1.6rem}
+  .card h4{margin:0 0 .6rem; font-size:1.15rem; font-weight:650; color:var(--ink)}
+  .card p{font-size:1rem; margin:0; line-height:1.5; max-width:none}
+
+  .big{background:var(--panel); border:1px solid var(--rule); border-radius:8px;
+    border-top:3px solid var(--accent); padding:1.6rem 1.7rem}
+  .big .n{font-size:clamp(2.4rem,4.6vw,3.6rem); font-weight:700; line-height:1;
+    letter-spacing:-.02em}
+  .big .n.alert{color:var(--alert)} .big .n.good{color:var(--good)}
+  .big .l{font-size:.85rem; letter-spacing:.14em; text-transform:uppercase;
+    color:var(--dim); margin-top:.7rem; font-weight:600}
+  .big .s{font-size:.95rem; color:var(--faint); margin-top:.5rem; line-height:1.45}
+
+  .slot{border:2px dashed var(--rule); border-radius:8px; background:var(--panel);
+    display:flex; align-items:center; justify-content:center; text-align:center;
+    color:var(--faint); font-size:1rem; padding:2rem; min-height:230px}
+
+  .rail{position:fixed; left:0; right:0; bottom:0; height:46px; display:flex;
+    align-items:center; justify-content:space-between; padding:0 8vw;
+    border-top:1px solid var(--rule); background:var(--ground); z-index:20;
+    font-size:.78rem; letter-spacing:.12em; text-transform:uppercase; color:var(--faint)}
+  .rail .prog{position:absolute; top:-1px; left:0; height:2px; background:var(--accent);
+    transition:width .3s}
+  .rail button{background:none; border:1px solid var(--rule); color:var(--dim);
+    border-radius:4px; padding:.32rem .75rem; font:inherit; cursor:pointer;
+    letter-spacing:.1em}
+  .rail button:hover{border-color:var(--accent); color:var(--accent)}
+  .rail button:focus-visible{outline:2px solid var(--accent); outline-offset:2px}
+
+  .notes{display:none; position:fixed; right:0; top:0; bottom:46px;
+    width:min(400px,38vw); background:var(--panel); border-left:1px solid var(--rule);
+    padding:2rem 1.8rem; overflow-y:auto; z-index:15}
+  body.notes-on .notes{display:block}
+  .notes h3{color:var(--accent); font-size:.8rem; letter-spacing:.16em;
+    text-transform:uppercase; margin:0 0 1rem}
+  .notes p{font-size:.95rem; line-height:1.7; max-width:none}
+  .notes .say{color:var(--ink); border-left:2px solid var(--accent);
+    padding-left:1rem; margin:1rem 0}
+  .notes .warn{color:var(--alert); font-size:.9rem}
+</style>
+
+<div class="deck">
+
+<!-- 1 ── 介绍 -->
+<section class="slide on" data-note="
+  <h3>开场</h3>
+  <p class='say'>一句话说清楚:这是一个进门前的扫查器 —— 在你走进洗手间之前,告诉你这里是不是有摄像头正在把画面传出去。</p>
+  <p>不要一上来讲技术,先让评委理解这是一个每个人都可能遇到的场景。</p>
+  <p>队友可以在这里介绍团队。</p>">
+  <div class="eyebrow">Wireless for Humanity · Student Design Competition</div>
+  <h1>WashroomSweep</h1>
+  <p class="lead" style="font-size:clamp(1.3rem,2.1vw,1.8rem)">
+    Before you walk into a washroom, know whether a camera in there
+    is streaming <strong>right now</strong>.</p>
+  <p class="mono" style="margin-top:2.5rem;color:var(--faint);font-size:1rem">
+    University of Waterloo &nbsp;·&nbsp; 2-person team</p>
+</section>
+
+<!-- 2 ── 背景 -->
+<section class="slide" data-note="
+  <h3>背景</h3>
+  <p class='say'>洗手间是最典型的场景:你无法预先检查、安装者有充足时间、受害者毫无察觉。</p>
+  <p>Airbnb 2024年4月30日起全面禁止室内摄像头 —— 这是真实政策,可以直接引用。</p>
+  <p>市面上的产品:几十块的 RF 探测器只会说''这里有信号'',但现代建筑里永远有信号,响个不停等于没响。专业设备有效但要几千块。</p>
+  <p class='warn'>要加具体统计数字的话自己查来源,别凭印象写。</p>">
+  <div class="eyebrow">Background</div>
+  <h2>Cheap cameras, and no good way to check</h2>
+  <div class="grid g2">
+    <div class="card">
+      <h4>The problem is real</h4>
+      <p>A streaming camera now fits inside a USB charger or a clothes hook and costs
+        less than a meal. Airbnb banned indoor cameras outright in April 2024;
+        South Korea runs municipal inspection teams for public washrooms.</p>
+    </div>
+    <div class="card">
+      <h4>Existing tools don't answer the question</h4>
+      <p><strong>RF detectors ($20–60)</strong> beep at any radio signal — always true
+        indoors, so useless. <strong>Lens finders</strong> need the right angle.
+        <strong>Pro gear</strong> works but costs $1k–10k and needs training.</p>
+    </div>
+  </div>
+  <p class="lead" style="margin-top:2rem">They tell you a signal exists.
+    We wanted to know: <strong>is something recording here, right now?</strong></p>
+</section>
+
+<!-- 3 ── 我们做了什么 -->
+<section class="slide" data-note="
+  <h3>我们做了什么</h3>
+  <p class='say'>一块几十块的 ESP32 被动监听空气,加一百行 Python 做判断。</p>
+  <p>强调''被动'':不加入网络、不解密任何东西,只读 802.11 帧头。这既是技术特点也是合规特点。</p>
+  <p>方向判断用 ToDS/FromDS 位,不需要知道路由器是谁 —— 真实的偷拍摄像头在你没见过的网络上。</p>">
+  <div class="eyebrow">What we built</div>
+  <h2>One ESP32, listening passively</h2>
+  <div class="grid g3">
+    <div class="card">
+      <h4>Sense</h4>
+      <p>An ESP32 counts bytes per device every 200 ms and splits upload from download.
+        It joins nothing and decrypts nothing — 802.11 headers only.</p>
+    </div>
+    <div class="card">
+      <h4>Judge</h4>
+      <p>~100 lines of Python on a laptop looks for the shape of a camera: heavy
+        one-way upload that reacts when the room changes.</p>
+    </div>
+    <div class="card">
+      <h4>Report</h4>
+      <p>A live dashboard flags suspects, and states <span class="mono">UNKNOWN</span>
+        whenever it cannot see properly. It never says “safe.”</p>
+    </div>
+  </div>
+  <p style="margin-top:1.8rem">Total radio cost: <strong>one dev board</strong> —
+    no capture card, no SDR.</p>
+</section>
+
+<!-- 4 ── DEMO 1: WiFi -->
+<section class="slide" data-note="
+  <h3>演示 1:被动感知</h3>
+  <p class='say'>板子什么网络都没连,但已经看到房间里所有设备,每台的上行和下行分开统计。</p>
+  <p>现场就指着滚动的列表讲。26 秒扫完 13 个信道发现 49 台设备 —— 这是真实数据。</p>
+  <p>可以说明:列设备本身不难,市面 APP 都能做。我们的价值在于从这几十台里挑出哪一台在拍这个房间。</p>">
+  <div class="eyebrow">Demo 1</div>
+  <h2>It sees every device in the room</h2>
+  <div class="grid g3">
+    <div class="big">
+      <div class="n">49</div>
+      <div class="l">Devices found</div>
+      <div class="s">In a 26-second sweep across all 13 channels</div>
+    </div>
+    <div class="big">
+      <div class="n">200<span style="font-size:.45em;color:var(--dim)"> ms</span></div>
+      <div class="l">Update rate</div>
+      <div class="s">Exact across 59 windows, zero dropouts</div>
+    </div>
+    <div class="big">
+      <div class="n">0</div>
+      <div class="l">Packets decrypted</div>
+      <div class="s">Never joins a network; header fields only</div>
+    </div>
+  </div>
+  <p style="margin-top:1.8rem">Listing devices is the easy part — phone apps do it.
+    The value is picking out <strong>which one is watching this room</strong>.</p>
+  <div class="slot" style="margin-top:1.2rem;min-height:150px">
+    [ 截图位 ]&nbsp; 实时界面 —— 设备列表在滚动
+  </div>
+</section>
+
+<!-- 5 ── DEMO 2: 摄像头检测 + 原理 -->
+<section class="slide" data-note="
+  <h3>演示 2:摄像头检测 —— 这是重头戏</h3>
+  <p class='say'>摄像头只上传不下载。实测:478 KB/s 单向上行,比第二活跃的设备高 170 倍。</p>
+  <p>第二个信号讲原理即可:摄像头用可变码率编码,画面变了数据量就变。关灯开灯做出一个已知节奏,看谁的流量跟着走 —— 跟得上的就是能看到这个房间的。</p>
+  <p class='warn'>必须主动说:为了绕开 ESP32 看不到 WiFi 6 的硬件限制,我们让板子自己建 802.11n 的网。真实场景摄像头在房间自己的网络上,这是真实约束。不主动说会被评委问倒。</p>">
+  <div class="eyebrow">Demo 2</div>
+  <h2>The camera gives itself away</h2>
+  <div class="grid g2">
+    <div class="card" style="border-left:4px solid var(--alert)">
+      <h4 style="color:var(--alert)">Signal 1 — it only uploads</h4>
+      <p>Phones and laptops mostly pull data down. A streaming camera does the
+        opposite, and it never stops.</p>
+      <p style="margin-top:1rem" class="mono">
+        <span style="color:var(--alert);font-size:1.5rem;font-weight:700">478 KB/s</span>
+        up &nbsp;·&nbsp; <strong>0</strong> down<br>
+        <span style="color:var(--faint);font-size:.9rem">170× the next busiest device
+        in the room</span></p>
+    </div>
+    <div class="card">
+      <h4>Signal 2 — it reacts to the room</h4>
+      <p>Cameras use variable-bitrate encoding: change what the camera sees and you
+        change how much it sends.</p>
+      <p style="margin-top:1rem">Flip the room's light in a known rhythm and see whose
+        traffic follows it. That is how you tell a camera watching <em>this</em> room
+        from someone uploading a video next door.</p>
+    </div>
+  </div>
+  <p style="margin-top:1.6rem;font-size:1.05rem;color:var(--faint)">
+    For this demo the board hosts its own 802.11n network, because its radio cannot
+    demodulate WiFi 6. A real camera sits on the room's own network — that limit is
+    on the summary slide.</p>
+</section>
+
+<!-- 6 ── BLE -->
+<section class="slide" data-note="
+  <h3>BLE —— Justin 讲</h3>
+  <p class='say'>我们也做了蓝牙扫描,但它不参与摄像头判定。</p>
+  <p>原因:蓝牙带宽比视频低两三个数量级,摄像头的视频数据在蓝牙上根本不存在。</p>
+  <p>队友解决的真实问题:手机蓝牙地址每15分钟轮换,表里会堆满不存在的''幽灵设备''。</p>
+  <p>这个''评估过并排除了''的回答是加分的 —— 显示做过取舍,不是漏了没做。</p>">
+  <div class="eyebrow">Demo 3 · Bluetooth</div>
+  <h2>We scan BLE too — and keep it<br>out of the verdict</h2>
+  <div class="grid g2">
+    <div class="card">
+      <h4>What it adds</h4>
+      <p>A second board lists nearby Bluetooth devices — signal, maker, name, and
+        whether the address is randomized. Useful context about what else is in
+        the room.</p>
+    </div>
+    <div class="card">
+      <h4>Why it can't find cameras</h4>
+      <p>Bluetooth carries orders of magnitude less data than live video, so a
+        streaming camera's payload never appears there. Seeing BLE only tells you a
+        device <em>has</em> a Bluetooth radio.</p>
+    </div>
+  </div>
+  <p style="margin-top:1.8rem">Hardest part: phones rotate their Bluetooth address
+    every ~15 minutes, so a naive list fills up with devices that no longer exist.
+    Entries expire fast so the list reflects <strong>what is here now</strong>.</p>
+  <div class="slot" style="margin-top:1.2rem;min-height:140px">
+    [ 截图位 ]&nbsp; BLE 扫描界面
+  </div>
+</section>
+
+<!-- 7 ── Extension -->
+<section class="slide" data-note="
+  <h3>其他用途</h3>
+  <p class='say'>同样的''谁在单向大量上传''这个信号,换个场景就有别的用途。</p>
+  <p>讲得轻松一点,展示想象力。但说清楚这些是设想,不是已实现的功能。</p>">
+  <div class="eyebrow">Where else it works</div>
+  <h2>The same signal, other rooms</h2>
+  <div class="grid g3">
+    <div class="card">
+      <h4>Confidential meetings</h4>
+      <p>Sweep before a sensitive discussion for anything streaming out of the room.</p>
+    </div>
+    <div class="card">
+      <h4>Exams and classrooms</h4>
+      <p>Sustained one-way upload from a seat looks different from ordinary browsing —
+        without inspecting any content.</p>
+    </div>
+    <div class="card">
+      <h4>Rentals and changing rooms</h4>
+      <p>A routine check between guests, instead of waiting for someone to complain.</p>
+    </div>
+  </div>
+  <p style="margin-top:2rem">All of it reuses one primitive: <strong>who is sending far
+    more than they receive, and does it react to this room?</strong></p>
+  <p class="mono" style="color:var(--faint);font-size:.95rem">
+    Directions, not shipped features.</p>
+</section>
+
+<!-- 8 ── 总结 -->
+<section class="slide" data-note="
+  <h3>总结</h3>
+  <p class='say'>我们不声称机制新颖 —— 先行工作已经存在。贡献是低成本实现、进门扫查场景、用房间自己的灯做刺激,以及量化了方法什么时候失效。</p>
+  <p>盲区一定要主动讲:本地存储摄像头和有线摄像头看不见;5GHz 和 WiFi 6 超出这个射频范围(实测只能恢复 0.03%);RSSI 不等于距离。</p>
+  <p>结尾落在诚实上:能说清楚边界在哪,比声称''全做完了''更可信。</p>
+  <p class='warn'>问答准备在 PRESENTATION_NOTES.md 里。</p>">
+  <div class="eyebrow">Summary</div>
+  <h2>What works, and what doesn't</h2>
+  <div class="grid g2">
+    <div class="card" style="border-left:4px solid var(--good)">
+      <h4 style="color:var(--good)">Works</h4>
+      <p>Live over real RF, a streaming camera is separated from every other device in
+        the room by <strong>three orders of magnitude</strong> — on upload asymmetry
+        alone.</p>
+    </div>
+    <div class="card" style="border-left:4px solid var(--alert)">
+      <h4 style="color:var(--alert)">Blind spots we measured</h4>
+      <p>Cameras recording to an <strong>SD card</strong> or over <strong>cable</strong>
+        emit nothing. <strong>5 GHz and WiFi 6</strong> are outside this radio — we
+        recovered 0.03% of an 802.11ax link. <strong>RSSI is not distance</strong>;
+        we don't localize.</p>
+    </div>
+  </div>
+  <p class="lead" style="margin-top:2rem">A sweeper that says
+    <span class="mono">UNKNOWN</span> when it cannot see is more useful than one that
+    says <span class="mono">SAFE</span> when it guessed.</p>
+  <p style="margin-top:1.5rem;color:var(--faint);font-size:1rem">
+    Prior art exists (DeWiCam, SnoopDog, Lumos). Ours is the low-cost build, the
+    entry-sweep scenario, and honest numbers for where it fails.<br>
+    <span class="mono">github.com/DavidWang1231/WashroomSweep</span></p>
+</section>
+
+</div>
+
+<div class="notes" id="notes"></div>
+
+<div class="rail">
+  <div class="prog" id="prog"></div>
+  <span id="counter" class="mono">1 / 8</span>
+  <span style="letter-spacing:.16em">WashroomSweep</span>
+  <button id="nbtn">Notes · N</button>
+</div>
+
+<script>
+  var slides = Array.prototype.slice.call(document.querySelectorAll('.slide'));
+  var i = 0;
+  var counter = document.getElementById('counter');
+  var prog = document.getElementById('prog');
+  var notes = document.getElementById('notes');
+
+  function show(n){
+    i = Math.max(0, Math.min(slides.length - 1, n));
+    slides.forEach(function(s,k){ s.classList.toggle('on', k===i); });
+    counter.textContent = (i+1) + ' / ' + slides.length;
+    prog.style.width = ((i+1)/slides.length*100) + '%';
+    notes.innerHTML = slides[i].getAttribute('data-note') || '';
+    window.scrollTo(0,0);
+  }
+  document.addEventListener('keydown', function(e){
+    if(e.key==='ArrowRight'||e.key==='PageDown'||e.key===' '){e.preventDefault();show(i+1);}
+    else if(e.key==='ArrowLeft'||e.key==='PageUp'){e.preventDefault();show(i-1);}
+    else if(e.key==='Home'){show(0);} else if(e.key==='End'){show(slides.length-1);}
+    else if(e.key==='n'||e.key==='N'){document.body.classList.toggle('notes-on');}
+  });
+  document.getElementById('nbtn').addEventListener('click',function(){
+    document.body.classList.toggle('notes-on');
+  });
+  show(0);
+</script>
