@@ -10,6 +10,12 @@ are on this network"*.
 Built by a team of two University of Waterloo undergraduates for the
 **Wireless for Humanity Student Design Competition**.
 
+![The dashboard flagging a streaming camera](docs/dashboard.png)
+
+*Real capture, replayed. The flagged device sustained 622 KB/s of upload with
+zero downlink; every other device in the room is three orders of magnitude
+below it.*
+
 ## How it works
 
 An ESP32 in WiFi promiscuous mode passively counts bytes per source MAC.
