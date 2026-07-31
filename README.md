@@ -86,22 +86,29 @@ LocCams). Our contribution is:
 ## Repository layout
 
 ```
-esp32/wifi_sniffer/   Main detector sketch (Arduino IDE, any ESP32 variant).
-                      Promiscuous capture; uplink/downlink split via the
-                      802.11 ToDS/FromDS bits (works for any BSS, no AP
-                      knowledge needed) with an optional BSSID filter for
-                      controlled tests; per-client byte counts in 200 ms
-                      windows; CSV + WINDOW heartbeat over serial; MARK
-                      command for stimulus alignment; channel lock/hop.
-esp32/ble_presence/   Supplementary BLE presence panel (adapted from
-                      Justin Fang's scanner). Lists nearby BLE devices for
-                      situational awareness only — BLE cannot carry live
-                      video, so this board never feeds the verdict.
-host/sweep.py         Host-side correlator (Python, pyserial). Reads the
-                      serial CSV, builds per-MAC byte-rate series, generates
-                      the square-wave reference at the operator's mark, and
-                      cross-correlates with lag search. Logs every run to
-                      logs/ as CSV for later plotting.
+esp32/wifi_sniffer/   Main detector. Promiscuous capture; uplink/downlink split
+                      via the 802.11 ToDS/FromDS bits (works for any BSS, no AP
+                      knowledge needed); per-client byte counts in 200 ms
+                      windows; CSV + heartbeat over serial; MARK for stimulus
+                      alignment; channel lock or scan.
+esp32/softap_demo/    The board hosts its own 802.11n network while sniffing it,
+                      which is how a camera gets onto a PHY this radio can read.
+                      Finds the camera on its own and drains the stream so the
+                      phone keeps uploading without a separate viewer.
+esp32/ble_scanner/    Justin's BLE board: scans advertisements, reports over
+                      UDP. Needs the Huge APP partition scheme; classic ESP32
+                      only. See its README.
+esp32/ble_presence/   Portable BLE variant that also builds for C3/S3.
+host/sweep.py         Correlator. Reads the serial CSV, builds per-MAC byte-rate
+                      series, generates the square-wave reference at the
+                      operator's mark, cross-correlates with a lag search.
+                      Logs each run to logs/.
+dashboard/            Live console (Justin's). Device tables, one-button sweep,
+                      UDP ingest, and a banner that flags the upload-only shape
+                      immediately rather than only after a 30 s sweep.
+slides/               Presentation: PDF to present from, .pptx to share, HTML
+                      with Chinese speaker notes.
+logs/                 Raw CSV from the runs quoted in this README.
 ```
 
 ## Quick start
@@ -112,7 +119,16 @@ host/sweep.py         Host-side correlator (Python, pyserial). Reads the
 hopping), `AP <mac>` / `AP OFF` (restrict counting to one BSSID / clear),
 `MARK`.
 
-**Host:**
+**Dashboard** (what you actually watch):
+
+```sh
+cd dashboard
+../host/.venv/bin/python monitor.py --port /dev/cu.usbserial-XXXX
+```
+
+Opens on http://localhost:8080.
+
+**Correlator alone** (terminal, no dashboard):
 
 ```sh
 cd host

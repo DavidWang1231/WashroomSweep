@@ -121,14 +121,17 @@ SWEEP = load_sweep_module()
 
 
 def proximity(rssi):
-    """Same buckets the boards use, for data that arrives as raw RSSI."""
+    """Signal-strength bucket. Deliberately not a distance or a location:
+    walls, antenna orientation and a body in the path move RSSI as much as
+    range does, so labelling these "in-room" or "behind a wall" would claim
+    a precision we cannot deliver. Same thresholds, honest labels."""
     if rssi > -50:
-        return "IN-ROOM"
+        return "strong"
     if rssi > -70:
-        return "near"
+        return "medium"
     if rssi > -82:
-        return "wall"
-    return "far"
+        return "weak"
+    return "faint"
 
 
 def upsert(key, fields):

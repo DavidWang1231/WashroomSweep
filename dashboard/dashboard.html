@@ -80,10 +80,10 @@
          border:1px solid var(--line); color:var(--dim); }
   .tag.ap  { color:var(--accent); border-color:var(--accent); }
   .tag.rnd { color:var(--near);   border-color:var(--near); }
-  .d-IN-ROOM { color:var(--strong); font-weight:600; }
-  .d-near { color:var(--near); }
-  .d-wall { color:var(--wall); }
-  .d-far  { color:var(--far); }
+  .d-strong { color:var(--strong); font-weight:600; }
+  .d-medium { color:var(--near); }
+  .d-weak { color:var(--wall); }
+  .d-faint  { color:var(--far); }
   .num { font-variant-numeric:tabular-nums; text-align:right; }
   .hot { color:var(--strong); font-weight:600; }
   .trend { width:12px; display:inline-block; }
@@ -164,7 +164,7 @@
     <div class="scroll">
       <table id="wifi-table">
         <thead><tr>
-          <th></th><th>Signal</th><th>MAC</th><th>Distance</th><th>Type</th>
+          <th></th><th>Signal</th><th>MAC</th><th>Signal</th><th>Type</th>
           <th class="num">Upload</th><th class="num">Download</th>
         </tr></thead>
       </table>
@@ -178,7 +178,7 @@
     <div class="scroll">
       <table id="ble-table">
         <thead><tr>
-          <th></th><th>Signal</th><th>Address</th><th>Distance</th><th>Name</th>
+          <th></th><th>Signal</th><th>Address</th><th>Signal</th><th>Name</th>
         </tr></thead>
       </table>
       <div class="empty" id="ble-empty">waiting for data…</div>
@@ -222,9 +222,9 @@ function bytes(n) {
 }
 
 const pct   = r => Math.max(0, Math.min(100, Math.round((r + 100) * 100 / 70)));
-const color = d => d === 'IN-ROOM' ? 'var(--strong)'
-              : d === 'near'       ? 'var(--near)'
-              : d === 'wall'       ? 'var(--wall)' : 'var(--far)';
+const color = d => d === 'strong' ? 'var(--strong)'
+              : d === 'medium'     ? 'var(--near)'
+              : d === 'weak'       ? 'var(--wall)' : 'var(--far)';
 const dur   = s => s < 60 ? s + 's' : s < 3600 ? Math.floor(s/60) + 'm' : Math.floor(s/3600) + 'h';
 const arrow = t => t > 0 ? '<span class="trend up">▲</span>'
                : t < 0 ? '<span class="trend down">▼</span>' : '<span class="trend"></span>';
